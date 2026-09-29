@@ -1,0 +1,61 @@
+## Step 9: Pre-Landing Review
+
+Run checklist/design below, specialist dispatch (9.1), merge and Red Team (9.2), prior-decision checks (9.3), then Fix-First/persistence (9.4). Small diffs or hosts without specialists skip only those sections; record skipped/unavailable coverage and reach Step 9.3. Continue to Step 10 only after a completed, converged review is persisted in Step 9.4.
+
+{{CONFIDENCE_CALIBRATION}}
+
+1. Read `~/.claude/skills/gstack/review/checklist.md`. If the file cannot be read, **STOP** and report the error.
+
+2. Before reading the diff, run `~/.claude/skills/gstack/bin/gstack-review-log --start review` and remember the printed token as REVIEW_START for this pass. Then run `git diff origin/<base>` to get the full diff (scoped to feature changes against the freshly-fetched base branch). Read non-ignored untracked source files too (`git ls-files --others --exclude-standard`); the fingerprint includes them. Each full re-review captures a new token here, never at log time.
+
+3. Apply the review checklist in two passes:
+   - **Pass 1 (CRITICAL):** SQL & Data Safety, LLM Output Trust Boundary
+   - **Pass 2 (INFORMATIONAL):** All remaining categories
+
+{{DESIGN_REVIEW_LITE}}
+
+   Include any design findings alongside the code review findings. They follow the same Fix-First flow below.
+
+{{REVIEW_ARMY}}
+
+{{CROSS_REVIEW_DEDUP}}
+
+## Step 9.4: Fix-First and persistence
+
+1. **Classify each finding from both the checklist pass and specialist review (Step 9.1-Step 9.2) as AUTO-FIX or ASK** per the Fix-First Heuristic in
+   checklist.md. Critical findings lean toward ASK; informational lean toward AUTO-FIX.
+
+2. **Auto-fix all AUTO-FIX items.** Apply each fix. Output one line per fix:
+   `[AUTO-FIXED] [file:line] Problem → what you did`
+
+3. **If ASK items remain,** present them in ONE AskUserQuestion:
+   - List each with number, severity, problem, recommended fix
+   - Per-item options: A) Fix  B) Skip
+   - Overall RECOMMENDATION
+   - If 3 or fewer ASK items, you may use individual AskUserQuestion calls instead
+
+4. **After all fixes (auto + user-approved), take the first matching branch:**
+   - If a dispatched specialist or Red Team failed, emit items 5–6 with `status:"unavailable"`, `completed:false` and `converged:false`. Then **STOP before Step 10**, naming the missing reviewer and retaining applied fixes. When coverage is available, rerun Step 5 and affected Steps 6–8 if code changed, then resume with a new Step 9 pass. Intentionally gated or host-unsupported reviewers were not dispatched and do not trigger this stop.
+   - If fixes were applied, commit named fixed files (`git add <fixed-files> && git commit -m "fix: pre-landing review fixes"`), then **stay in this invocation and loop**: re-run the test suite (Step 5) and affected Steps 6–8, then re-run the whole Step 9 cycle from a new pass's start-token capture, including design, specialists, Red Team, and dedup. Repeat until a complete pass applies ZERO fixes with tests green or the same explicit Step 5 waiver. NEVER tell the user to run `/ship` again just for this cycle.
+   - **Bound: 3 fix cycles.** If cycle 3 still fixes code, persist item 6 below with `converged:false` and that pass's original REVIEW_START, then STOP and report which findings keep reappearing.
+   - A zero-fix pass (including explicit skips) proceeds to summary and persistence below.
+
+5. Output summary: `Pre-Landing Review: N issues — M auto-fixed, K asked (J fixed, L skipped)`
+
+   If coverage is incomplete: `Pre-Landing Review: INCOMPLETE — <missing reviewers>`.
+   Otherwise, if no issues found: `Pre-Landing Review: No issues found.`
+
+6. Persist the review result to the review log:
+```bash
+~/.claude/skills/gstack/bin/gstack-review-log '{"skill":"review","timestamp":"TIMESTAMP","status":"STATUS","issues_found":N,"critical":N,"informational":N,"quality_score":SCORE,"specialists":SPECIALISTS_JSON,"findings":FINDINGS_JSON,"commit":"'"$(git rev-parse --short HEAD)"'","via":"ship","completed":COMPLETED,"converged":CONVERGED,"cycles":CYCLES}' --finish REVIEW_START
+```
+Substitute TIMESTAMP (ISO 8601), STATUS ("unavailable" for missing dispatched coverage, otherwise "issues_found" for unresolved defects or "clean" for none),
+and N values from the remaining unresolved findings, not the original pre-fix totals. The `via:"ship"` distinguishes from standalone `/review` runs.
+- `REVIEW_START` = the token captured at the start of Step 9 before this pass read the diff. `COMPLETED` = true only if the checklist and dispatched specialists completed; failed or missing dispatched coverage is false, never clean. A host-unsupported or intentionally gated specialist was not dispatched and does not block completion; retain the skip/unavailable label. `CONVERGED` = true only for a completed pass that applied zero fixes. `CYCLES` = fix cycles performed (0 for a first-pass completion). Never recapture at persistence to certify fixes that have not been reviewed.
+- `quality_score` = the PR Quality Score computed in Step 9.2 (e.g., 7.5). If specialists were skipped or unsupported by this host, use `10.0`
+- `specialists` = the per-specialist stats object compiled in Step 9.2. Each specialist that was considered gets an entry: `{"dispatched":true/false,"findings":N,"critical":N,"informational":N}` if dispatched, or `{"dispatched":false,"reason":"scope|gated"}` if skipped.
+- `findings` = array of per-finding records. For each finding (from checklist pass and specialists), include: `{"fingerprint":"path:line:category","severity":"CRITICAL|INFORMATIONAL","action":"ACTION"}`. ACTION is `"auto-fixed"`, `"fixed"` (user approved), or `"skipped"` (user chose Skip).
+
+Save the review output — it goes into the PR body in Step 19.
+
+---

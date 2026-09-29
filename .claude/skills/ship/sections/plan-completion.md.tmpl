@@ -1,0 +1,41 @@
+## Step 8: Plan Completion Audit
+
+**Dispatch this step as a subagent** using the Agent tool with `subagent_type: "general-purpose"`. The subagent reads the plan file and every referenced code file in its own fresh context. Parent gets only the conclusion.
+
+{{FOREGROUND_DISPATCH_NOTE}} The Gate Logic below consumes this audit's LAST-line JSON before /ship can proceed.
+
+**Subagent prompt:** Pass these instructions to the subagent:
+
+````text
+You are running a ship-workflow plan completion audit. The base branch is `<base>`. Use `git diff origin/<base>` and inspect untracked files from `git status` to see the full proposed change. Do not commit or push. Report only: classify every item, but do not execute Gate Logic, ask the user, or advance the workflow. The parent applies those gates to your report.
+
+{{PLAN_COMPLETION_AUDIT_SHIP}}
+
+After your analysis, output a single JSON object on the LAST LINE of your response (no other text after it):
+{"total_items":N,"done":N,"changed":N,"partial":N,"not_done":N,"unverifiable":N,"summary":"<markdown checklist for PR body>"}
+Counts map one-to-one to the classifications above and sum to total_items. No plan or no actionable items means all counts are zero with the skip reason in summary. Do not classify work as deferred; only the parent can record a user-approved deferral.
+````
+
+**Parent processing:**
+
+1. Parse the LAST line as JSON. A non-null `error`, any missing count or count that is not a nonnegative integer, classification count sum unequal to `total_items`, or non-string `summary` takes the audit-failure fallback below. Validate every count field in the contract above. Valid no-plan/no-actionable-item reports retain zero counts and their summary.
+2. Store the counts for Step 20 metrics; use `summary` in PR body.
+3. Apply Gate Logic below to `not_done` and `unverifiable` before continuing. Carry approved deferrals, with item text and plan path, to Step 14; keep them separate from dropped scope. `partial` items receive a PR note, not the NOT DONE gate.
+4. Embed `summary` in PR body's `## Plan Completion` section (Step 19). For the UNVERIFIABLE gate, also embed `## Plan Completion — Manual Verifications` with each Y response's evidence and each D response's dropped item.
+
+**If the subagent fails, returns invalid JSON, or has no final output after ~10 minutes:** Stop any still-running background task before an inline fallback using the same extraction/classification logic; never race its late result. If fallback also fails, AskUserQuestion: "Audit failed ({reason}): A) Skip audit and ship anyway, recording the skip in PR body and Step 20 metrics; B) Stop and fix the audit (recommended/default)." Silent fail-open is the failure shape that VAS-449 surfaced.
+
+---
+
+{{PLAN_COMPLETION_GATE_SHIP}}
+
+{{PLAN_VERIFICATION_EXEC}}
+
+{{SCOPE_DRIFT}}
+
+The parent now runs Prior Learnings and its cross-project setting question when
+offered, before Step 9, even when no plan file was found.
+
+{{LEARNINGS_SEARCH:query=release ship version changelog merge pr}}
+
+---
